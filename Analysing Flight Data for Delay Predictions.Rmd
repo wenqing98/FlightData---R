@@ -1,0 +1,573 @@
+---
+title: "200615569 R-Project"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+Default. 
+
+```{r}
+memory.limit(24000)
+```
+
+`memory.limit()` allows us to increase the amount of memory in bytes that a scrpt is allowed to allocate. (Only works for windows)
+
+```{r}
+#install.packages("DBI")
+#install.packages("dplyr")
+#install.packages("ggplot2")
+#install.packages("sqldf")
+#install.packages("plyr")                                                 
+#install.packages("readr")
+#install.packages("RColorBrewer")
+#install.packages("forcats")
+#install.packages("tidymodels")
+#install.packages("modeltime")
+#install.packages("tidyverse")
+#install.packages("timetk")
+```
+
+Before you run the set of codes below, you are required to install the packages first, however, do take note that installing once per computer will do.
+
+```{r, include=FALSE, results='hide'}
+library(DBI) #helps to connect R to the DBMS
+library(dplyr) #provides a set of tools for manuiplating dataset in R
+library(ggplot2) #a tool used when visualising data.
+library(sqldf) #helps in running SQL statementon R data frames
+library(plyr) #helps in splitting data apart, manuiplating datas in it and combine it together                    
+library(readr) #deal with reading in large flat files such as CSV
+library(RColorBrewer) #to manage colors in R
+library(forcats) #forcats package provides a set of tools to solve problems with factors that includes changing the order of level of the value.
+library(tidymodels) #contains a set of packages that can be used for modeling and statistical analysis
+library(modeltime) #The Tidymodels Extension for Time Series Modeling
+library(tidyverse) #tidyverse is about the connections between the tools that make the workflow possible
+library(timetk) #Used when working with time series type of data
+```
+
+```{r}
+setwd("~/Resume/Analysing Flight Data for Delay Predictions/R")
+```
+
+The function `setwd` is a function that helps to change the directory to the file we are working it. This function itself do not require package to run.
+
+```{r}
+if (file.exists("airline2.db")) 
+  file.remove("airline2.db") #removing previous data inside the database
+conn <- dbConnect(RSQLite::SQLite(), "airline2.db") #establishes a new connection to the database
+```
+This enables us to set up a connection to the existing database.
+
+```{r}
+airports <- read.csv("airports.csv", header = TRUE)
+carriers <- read.csv("carriers.csv", header = TRUE)
+planes <- read.csv("plane-data.csv", header = TRUE)
+dbWriteTable(conn, "airports", airports)
+dbWriteTable(conn, "carriers", carriers)
+dbWriteTable(conn, "planes", planes)
+```
+
+`read.csv()` is a function that helps us to not only read a csv file but also importing the data into a new dataframe
+`dbWriteTable` allows programmer to write a local dataframe or file to the database
+
+```{r, include=FALSE, results='hide'}
+ontime <- list.files(path = "~/Resume/Analysing Flight Data for Delay Predictions/R",    
+                       pattern = "*.csv", full.names = TRUE) %>% 
+  lapply(read_csv) %>%                                           
+  bind_rows
+```
+
+`list.files` - List the files and folders in the current working directory, the data is then combine into a new dataframe`
+`bind_rows` - Combines two or more different data frames into one
+
+```{r}
+dbWriteTable(conn, "ontime", ontime)
+```
+
+`dbWriteTable` allows programmer to write a local data frame or file to the database
+
+
+
+
+
+## Q1 When is the best time of day, day of the week, and time of year to fly to minimise delays?
+```{r, echo=TRUE}
+q1 <- dbGetQuery(conn,
+                  "SELECT DayOfWeek,
+                      DayOfMonth AS DayOfMonthArrive,
+                      Month AS MonthArrive,
+                      Year AS YearArrive,
+                      DepTime AS DepTime, 
+                      AVG(DepDelay) AS avg_delay
+                  FROM ontime
+                  WHERE Cancelled = 0 AND 
+                      Diverted = 0 AND 
+                      DepDelay <= 0 AND
+                      DepTime <=2400 AND
+                      ArrDelay <= 0
+                  GROUP BY DayOfMonthArrive,MonthArrive,DepTime
+                  ORDER BY avg_delay")
+```
+
+We use `dbGetQuery` from the `DBI` package - this allows programmers to write queries as well as retrieving the result, it is also written in a SQL syntax.
+
+Next, Depending on the results the programmer wants to pull out, it `SELECT` all the result `FROM` the `ontime` table after a set of condition (`WHERE`) has been set to them. It is then `GROUP BY` so those rows that shares the same name will be group together and lastly they are `ORDER BY` a set of variable. By default it is ascending.
+
+To answer this question, we first have to `SELECT` `DayOfWeek`,  `DayOfMonth`, `MonthArrive`, `Year`, `DepTime`, `AVG(DepDelay)` from the `ontime` table that contains all the flight record occurring from 2004 to 2005.
+The `WHERE` condition allows us to filter out data that we do not need for example, we will only want ArrDelay to be 0 or lesser, as this allows us to only draw out flight record that did not have any arrival delay.
+
+```{r}
+q1$TimeOfTheDay = ifelse(q1$"DepTime" >= 0500 & q1$"DepTime" < 1159 , "Morning",
+                    ifelse(q1$"DepTime" >= 1200 & q1$"DepTime" < 1800 , "Afternoon",
+                      ifelse(q1$"DepTime" >= 1801 & q1$"DepTime" < 2359 , "Evening","Midnight")))
+ 
+```
+
+To categories all the different timing into parts of the day, we will use `ifelse`. 
+For example, if the DepTime is between 0500-1159, it will categories it as `Morning` and all these new variables will be assigned into a new column `TimeOfTheDay`. When the time is between 1200-1800, it will categories it as `Afternoon`. When the time is between 1801-2359, it will categories it as `Evening`. The remaining departure time will be categorized as `Midnight`.
+
+```{r}
+q1$DayOfWeekName <- factor(q1$DayOfWeek, levels=1:7,
+                               labels=c("Monday", "Tuesday", "Wednesday",
+                                        "Thursday", "Friday", "Saturday","Sunday"))
+
+```
+
+Similar to the one above, it will assign a new variable name based on the variable name inside the `DayOfWeek` column, and all these new varaibles will be assigned into a new column `DayOfWeekName`
+
+
+```{r}
+head(q1, 5)
+```
+
+```{r, echo=FALSE}
+print(paste("The best time of the day to fly is on a",q1[1, "DayOfWeekName"],",around",q1[1, "DepTime"],q1[1, "TimeOfTheDay"], "to minimise delay."))
+
+```
+
+`print(paste())` - the `paste()` function makes a character vector and `print()` function prints.
+
+We can also see that the top 5 rows shows that flying during midnight is the best time period or during a Tuesday or on a Friday would also be optimal.
+
+
+
+
+
+## Q2 Do older planes suffer more delays?
+```{r}
+q2 <- dbGetQuery(conn,
+                 "SELECT planes.model AS PlaneModel, 
+                         TailNum AS TailNum, 
+                         AVG(ontime.DepDelay) AS Avg_delay, 
+                         ontime.Year AS Yeararrive, 
+                         planes.year AS YearPlaneManufactured
+                  FROM planes JOIN ontime USING(tailnum)
+                  WHERE ontime.Cancelled = 0 AND 
+                         planes.Year != '' AND 
+                         planes.Year != 'None' AND 
+                         planes.Year >= 1900 AND
+                         ontime.Diverted = 0 AND 
+                         ontime.DepDelay > 0
+                  GROUP BY TailNum
+                  ORDER BY avg_delay")
+```
+
+
+To answer this question, we first have to `SELECT` `ontime.Year`, `AVG(ontime.DepDelay)`, from the `ontime` table as well as `planes.model`, (Plane model) `planes.year` (the year the plane is manufactured) from the `planes`. Combining the records from both table is through the variable `TailNum`
+The `WHERE` condition allows us to filter out rows that includes missing or `None` as they generally do not serve any purpose in our research finding
+
+
+```{r}
+q2$YearDifference <- q2$Yeararrive - as.numeric(q2$YearPlaneManufactured)
+```
+
+
+`as.numeric` function takes an R object that needs to be coerced and returns the numeric value
+`-` is used here to get the difference between two different column and input the new value into a new column inside the same data frame `q2`
+
+
+```{r}
+q2$AgeOfPlane = ifelse(q2$"YearDifference" < 10, "Newer_Planes","Older_Planes")
+```
+
+
+`ifelse` is used here to seperated the ageofplane into two different category, `Newer_Planes` or `Older_Planes`. We will assume that any planes age that is below 10 considered newer planes while any age above is considered older planes
+
+
+```{r}
+q2a <- sqldf("select Count(*) AS Total, 
+                     AgeOfPlane AS AgeOfPlane
+              FROM q2
+              GROUP BY AgeOfPlane
+              ORDER BY AgeOfPlane")
+```
+
+
+`sqldf` is used when there are changes made in the dataframe and in this case `q2`, to retrieve the new set of data, one of the solution is to disconnect the database and connect again but it will take time, therefore `sqldf` is used instead.
+`Count(*)` is used here to count the total number of planes that is being group by the same name
+
+In this case, we will be counting the total number of planes that is considered `Newer_Planes` as well as planes that is considered `Older_Planes`
+
+
+```{r, echo=FALSE}
+print(q2a)
+```
+
+`print()` will print the result of the queries made earlier.
+
+As We can see that newer planes have a higher tendency to cause delay therefore the age of the plane is not a factor when a delay occurs
+
+
+
+
+
+## Q3 How does the number of people flying between different locations change over time?
+Note:Since the number of people flying is not provided here, we will be looking into number of flights instead
+```{r}
+q3 <- dbGetQuery(conn,
+                 "SELECT Month, 
+                         Year, 
+                         COUNT (*) AS TotalFlights,
+                         Dest AS Destination
+                  FROM ontime
+                  WHERE ontime.Cancelled = 0
+                  GROUP BY Dest, Month, Year
+                  ORDER BY Dest ASC, Year ASC, Month ASC")
+```
+
+
+To answer this question, we first have to `SELECT` `Month`, `Year`, `Dest` as well as counting the total number of flights that have occured during the different time period in different location from the `ontime` table.
+
+
+
+```{r}
+q3$MonthYear<- paste(as.integer(q3$Month),'/',as.integer(q3$Year))
+```
+
+
+There will be some data manipulation here whereby we will combine both the `Month` & `Year` from the `q3` dataframe. This way, we will be able to group all the number of flights occurring in the particular month and year together.
+
+
+```{r}
+q3a <- sqldf("SELECT TotalFlights,
+                     MonthYear,
+                     Destination
+              FROM q3
+              WHERE Destination = 'ABE' OR Destination = 'CSG' OR Destination = 'HLN' OR Destination = 'LAW' OR Destination = 'ACT' OR Destination = 'ACV'
+              GROUP BY Destination,Year, Month
+              ORDER BY Destination,Year, Month
+             ")
+```
+
+Due to the screen size constraint, we will only be able to view up to 6 different Destination of datas, it is possible to view more or all at the same time. In this case, we will only look into the 6 different destination, `ABE``CSG``HLN``LAW``ACT``ACV`.
+
+```{r}
+q3a$MonthYear <- factor(q3a$MonthYear,levels = c("1 / 2004", "2 / 2004", "3 / 2004","4 / 2004", "5 / 2004", "6 / 2004","7 / 2004", "8 / 2004", "9 / 2004","10 / 2004", "11 / 2004", "12 / 2004",
+                                         "1 / 2005", "2 / 2005", "3 / 2005","4 / 2005", "5 / 2005", "6 / 2005","7 / 2005", "8 / 2005", "9 / 2005","10 / 2005", "11 / 2005", "12 / 2005"))
+```
+
+What is done here is to manually set the x axis so that when is required to plot the data later on, it will be according to the month then followed by year.
+
+```{r, echo=FALSE}
+ggplot(data=q3a, mapping = aes(x= MonthYear, y=TotalFlights , fill=Destination, color=Destination, group = 6)) +
+  geom_line(linetype = 'dashed', color="black") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1)) +
+  labs(x = "Month And Different Year" , y = "Total Flights") +
+  facet_wrap(facets = vars(Destination)) + geom_point()
+```
+
+`ggplot` comes from a package called `ggplot2` that is used to create graphical visualisation.
+`geom_line` will use line plot to display the data into a graph
+`labs` this set the x axis name and y axis name
+`facet_wrap` arranging the data into grids
+
+
+
+
+
+## Q4 Can you detect cascading failures as delays in one airport create delays in others?
+```{r}
+q4 <- dbGetQuery(conn,
+            "SELECT Origin,
+                    Dest,
+                    TailNum,
+                    DayOfMonth,
+                    Month,
+                    Year,
+                    ArrDelay,
+                    DepDelay
+             FROM ontime
+             WHERE Cancelled='0' AND
+                    ArrDelay > '0' AND
+                    ArrDelay != 'Na' AND
+                    DepDelay != 'Na' AND
+                    TailNum != '0'
+             GROUP BY Origin, Dest, TailNum, DayOfMonth,Month,Year
+             ORDER BY TailNum, Year ASC, Month ASC, DayOfMonth ASC, ontime.DepTime ASC")
+```
+
+
+To answer this question, we first have to `SELECT` `Origin`, `Dest`, `DayOfMonth`, `Month`, `Year`, `ArrDelay`, `DepDelay` from the `ontime` table. At the same time, we will filter out variables that shows either `Na` or `0` as this would mean that the data collected was not sufficient to draw any insights for analyses. We would also filter out ArrDelay that is negative as we are only interested in planes that have a delay during the arrival
+
+
+```{r}
+q4$DelayStatus = ifelse(q4$"DepDelay" < 1, "NotDelay","Delay")
+```
+
+`ifelse` is used here to separate the DepDelay into two different category, `NotDelay` or `Delay`. We will assume that any Delay below 0 or lesser is considered not delay
+
+```{r}
+q4a <- sqldf("select COUNT(*) AS Total,
+                     DelayStatus 
+                  FROM q4
+                  GROUP BY DelayStatus
+                  ORDER BY Total DESC")
+```
+
+We will now count the total number of records that has been categorized into either `Delay` or `NotDelay`
+
+```{r}
+Total = sum(q4a[, 'Total'])
+q4a$PercentageOfDelayed = (q4a[1:2,1] / Total) * 100
+q4a$PercentageOfDelayed = format(round(q4a$PercentageOfDelayed, 5), nsmall = 2)
+print(q4a)
+```
+
+We will sum the total number of variables in the `Total Count` column and changing it to percentage and place it into a new column `PercentageOfDelayed`.
+
+
+
+We can also look more in depth by counting the total number of arrival delays through each individual Plane (`TailNum`)
+
+```{r}
+q4aa <- sqldf("select COUNT(*) AS Total,
+                     DelayStatus,
+                     TailNum
+                  FROM q4
+                  GROUP BY DelayStatus,
+                           TailNum
+                  ORDER BY TailNum DESC")
+head(q4aa, 5)
+```
+
+Similar to q4a, We will now count the total number of records that has been categorized into either `Delay` or `NotDelay` for individual based on each individual `TailNum`.
+
+
+
+We can also look into the total number of other factors that caused arrival to be delay
+```{r}
+q4b <- dbGetQuery(conn,
+            "SELECT Origin,
+                    Dest,
+                    TailNum,
+                    DayOfMonth,
+                    Month,
+                    Year,
+                    ArrDelay,
+                    DepDelay,
+                    CarrierDelay,
+                    WeatherDelay,
+                    NASDelay,
+                    SecurityDelay,
+                    LateAircraftDelay
+             FROM ontime
+             WHERE ontime.Cancelled='0' AND
+                    ontime.ArrDelay > '0' AND
+                    ontime.DepDelay > '0' AND
+                    ontime.ArrDelay != 'Na' AND
+                    ontime.DepDelay != 'Na'
+        GROUP BY Origin, Dest, TailNum,DayOfMonth,Month,Year
+             ORDER BY Year ASC, Month ASC, DayOfMonth ASC")
+
+
+```
+
+Similar to q4, we will now pull out additional records that includes `CarrierDelay`, `WeatherDelay`, `NASDelay`, `SecurityDelay`, `LateAircraftDelay` 
+
+``` {r}
+q4b$DelayStatus = ifelse(q4b$"DepDelay" < 1, "NotDelay","Delay")
+q4b$CarrierDelayStatus = ifelse(q4b$"CarrierDelay" < 1, "0","1")
+q4b$WeatherDelayStatus = ifelse(q4b$"WeatherDelay" < 1, "0","1")
+q4b$NASDelayStatus = ifelse(q4b$"NASDelay" < 1, "0","1")
+q4b$SecurityDelayStatus = ifelse(q4b$"SecurityDelay" < 1, "0","1")
+q4b$LateAircraftDelayStatus = ifelse(q4b$"LateAircraftDelay" < 1, "0","1")
+```
+
+Here we will categories all the different factors for delay into `0` for Not Delay or `1` for Delay
+
+```{r}
+q4c <- sqldf("select COUNT(*) AS TotalCount, 
+                     CarrierDelayStatus, 
+                     WeatherDelayStatus, 
+                     NASDelayStatus, 
+                     SecurityDelayStatus, 
+                     LateAircraftDelayStatus 
+          FROM q4b 
+          WHERE DelayStatus='Delay' AND CarrierDelayStatus='1' OR WeatherDelayStatus='1' 
+                  OR NASDelayStatus='1' OR SecurityDelayStatus='1' OR LateAircraftDelayStatus='1' 
+          GROUP BY CarrierDelayStatus,WeatherDelayStatus,NASDelayStatus,SecurityDelayStatus,LateAircraftDelayStatus 
+          ORDER BY TotalCount DESC")
+```
+
+We will now count the total number of factors that caused the delay that has been categorized into either `0` or `1` 
+
+
+```{r}
+Total = sum(q4c[, 'TotalCount'])
+q4c$PercentageOfDelayed = (q4c[1:28,1] / Total) * 100
+q4c$PercentageOfDelayed = format(round(q4c$PercentageOfDelayed, 5), nsmall = 2)
+
+```
+
+We will sum the total number of variables in the `Total Count` column and changing it to percentage and place it into a new column `PercentageOfDelayed`.
+
+
+``` {r}
+print(q4c)
+```
+
+Displaying the results
+
+
+
+
+Q5) Use the available variables to construct a model that predicts delays.
+```{r}
+ontime$date<-as.Date(with(ontime,paste(DayofMonth,Month,Year,sep="-")),"%d-%m-%Y")
+```
+
+`as.Date` will combine the `DayOfMonth` & `Month` & `Year` into a single date seperated by `-`
+
+
+```{r}
+interactive = TRUE
+```
+
+By setting `interactive = TRUE`, we will be able to convert the plot from a static to a interactive plot
+
+
+```{r}
+q5 <- sqldf("select date, 
+                    AVG(ontime.ArrDelay) AS Avg_ArriveDelay
+            FROM ontime
+            GROUP BY date
+            ORDER BY AVG_ArriveDelay ASC")
+```
+
+Here, we will be extracting out all the average arrivedelay timings and will be group based on the date they are in.
+
+```{r, echo=FALSE}
+q5 %>%
+  plot_time_series(date, Avg_ArriveDelay, .interactive = interactive)
+```
+
+We first would want to plot our the dataset using the function `plot_time_series` so that we will be able to visualise how our dataset will look like.
+By setting `intetactive = TRUE`, this converts plots from interactive to static
+
+```{r, echo=FALSE, result='hide', include=FALSE}
+sep <- q5 %>%
+  time_series_split(assess = "6 months", cumulative = TRUE)
+```
+
+The function `time_series_split` is used when we are trying to split or seperate the dataset into training and testing set.
+Since we will want to only use 25% of the data as the testing set, we will put the function `assess` to equal to 6 months. 
+When `Cumulative = True`, all the data that is not used for the testing part will be automatically used as the training set of data. 
+
+```{r}
+sep %>%
+  tk_time_series_cv_plan() %>%
+  plot_time_series_cv_plan(date, Avg_ArriveDelay, .interactive = interactive, .title = "Time Series Cross Validation Plan")
+```
+Here we have plot the table that shows the data being seperated into 2 sets of data for training and testing.
+`tk_time_series_cv_plan` helps to convert all the different objects or seperated objects into a new dataframe
+
+```{r}
+recipes <- recipe(Avg_ArriveDelay ~ ., data = training(sep)) %>%
+  step_timeseries_signature(date) 
+```
+
+Next, we will be adding the time series signature and fitting it into the training set. This enables the system to learn as well as recognizing and learning the patterns and trends.
+The `recipes` package allows us to add pre-processing steps that are applied sequentially as part of a data transformation pipeline.
+The `timetk` has `step_timeseries_signature()`, is used to add different features that can aid in the machine learning models.
+
+```{r}
+bake(prep(recipes), new_data = training(sep))
+```
+
+`prep()` basically takes the data provided (training set) and computes all the necessary quantities using the training data and to process the recipe
+`bake()` is used to run on the test data, it takes all the quantities from the previous step and apply them on the test data
+
+```{r}
+recipe_final <- recipes %>%
+  step_fourier(date, period = 365, K = 5) %>%
+  step_rm(date) %>%
+  step_normalize(contains("index.num"), date_year) %>%
+  step_dummy(contains("lbl"), one_hot = TRUE) 
+```
+
+
+```{r}
+juice(prep(recipe_final))
+```
+
+`juice()` will return the results of a recipe where all the steps have been applied to the data
+
+```{r}
+Model_LM <- linear_reg(mode = "regression") %>% 
+  set_engine("lm")
+```
+
+Since we are dealing with continuous variable, we will be using linear regression as the model. We will then set the engine as `lm` as the model specification.
+
+```{r}
+workflow_LM <- workflow() %>%
+  add_recipe(recipe_final) %>%
+  add_model(Model_LM)
+```
+
+Using `workflow()` will allow us to connect the previously completed preprocessing recipe to the model specification
+
+```{r}
+workflow_LM
+```
+
+```{r}
+Fit_workflow_LM <- workflow_LM %>% fit(data = training(sep))
+```
+
+`fit()` is used train the workflow
+
+```{r}
+model_table <- modeltime_table(Fit_workflow_LM) 
+```
+
+
+```{r, include=FALSE}
+predicted_table <- model_table %>%
+  modeltime_calibrate(testing(sep))
+```
+
+The model time calibration function is used when we need to measure the inaccuracy and estimate the confidence intervals. This helps to calibrate the model on the testing set. This products two new different columns that includes the testing set for its actual values, predicted values, and residuals.
+
+
+```{r, echo=FALSE}
+predicted_table %>%
+  modeltime_forecast(actual_data = q5) %>%
+  plot_modeltime_forecast(.interactive = interactive, .title = "Forecast",
+                          .x_lab = "Time Series",
+                          .y_lab = "Actual Arrival Delay & Predictede Arrival Delay")
+```
+
+Here, we have our predicted model that is plotted along the original set of data.
+
+The function `modeltime_forecast()` is used when we want to generated the forecasted set of data for the testing set.
+The function `plot_modeltime_forecast()` helps in visualizing the results in the interactive and static plot that we have also set at the start
+
+
+```{r}
+dbDisconnect(conn)
+```
